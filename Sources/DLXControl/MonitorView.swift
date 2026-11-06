@@ -1,6 +1,6 @@
 import AppKit
 import Charts
-import DL24Core
+import DLXCore
 import SwiftUI
 import UniformTypeIdentifiers
 

@@ -2,21 +2,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "DL24Control",
+    name: "DLXControl",
     platforms: [.macOS("26.0")],
     products: [
-        .executable(name: "DL24Control", targets: ["DL24Control"]),
+        .executable(name: "DLXControl", targets: ["DLXControl"]),
     ],
     targets: [
-        .target(name: "DL24Core", swiftSettings: [.swiftLanguageMode(.v5)]),
+        .target(name: "DLXCore", swiftSettings: [.swiftLanguageMode(.v5)]),
         .executableTarget(
-            name: "DL24Control",
-            dependencies: ["DL24Core"],
+            name: "DLXControl",
+            dependencies: ["DLXCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
-            name: "DL24CoreChecks",
-            dependencies: ["DL24Core"],
+            name: "DLXCoreChecks",
+            dependencies: ["DLXCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

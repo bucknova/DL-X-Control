@@ -1,6 +1,6 @@
 import AppKit
 import Charts
-import DL24Core
+import DLXCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -421,7 +421,7 @@ struct SessionReport: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(meta.name).font(.system(size: 22, weight: .bold))
-            Text("DL24 Control test report, \(meta.date.formatted(date: .long, time: .shortened)), connected by \(meta.transport)")
+            Text("DL-X Control test report, \(meta.date.formatted(date: .long, time: .shortened)), connected by \(meta.transport)")
                 .font(.system(size: 10))
             Grid(alignment: .leading, horizontalSpacing: 26, verticalSpacing: 5) {
                 row("Capacity", formatAh(summary.capacityAh))

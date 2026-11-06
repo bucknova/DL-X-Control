@@ -1,4 +1,4 @@
-# DL24 Control
+# DL-X Control
 
 A native Liquid Glass macOS app for the ATORCH DL24P electronic load: live monitoring, load control, automated tests and a data logger, over USB or Bluetooth.
 
@@ -13,15 +13,15 @@ Disk images are built by GitHub Actions:
 
 | File | Runs on |
 |---|---|
-| `DL24-Control-…-apple-silicon.dmg` | Apple Silicon Macs |
-| `DL24-Control-…-universal.dmg` | Apple Silicon and Intel Macs |
+| `DL-X-Control-…-apple-silicon.dmg` | Apple Silicon Macs |
+| `DL-X-Control-…-universal.dmg` | Apple Silicon and Intel Macs |
 
 Requires macOS 26 or later. The Intel slice is compiled by CI but has not been run on an Intel Mac.
 
 The builds aren't notarized, so macOS will block the first launch. Drag the app to Applications, then either use **System Settings > Privacy & Security > Open Anyway**, or run:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/DL24 Control.app"
+xattr -dr com.apple.quarantine "/Applications/DL-X Control.app"
 ```
 
 ## Features
@@ -76,30 +76,30 @@ Needs macOS 26 or later and the Command Line Tools. Xcode is not required.
 ```
 
 ```bash
-open "build/DL24 Control.app"
+open "build/DL-X Control.app"
 ```
 
 To try it with no hardware, using a simulated DL24P and separate temporary data:
 
 ```bash
-open "build/DL24 Control.app" --args --demo
+open "build/DL-X Control.app" --args --demo
 ```
 
 Protocol and safety checks, using bytes captured from a real unit:
 
 ```bash
-swift run DL24CoreChecks
+swift run DLXCoreChecks
 ```
 
 ## Data
 
-Sessions are in `~/Library/Application Support/DL24 Control/Sessions`, one folder each with `meta.json` and an append-only `samples.csv`. Counter values are saved to `counter-resets.jsonl` before any reset.
+Sessions are in `~/Library/Application Support/DL-X Control/Sessions`, one folder each with `meta.json` and an append-only `samples.csv`. Counter values are saved to `counter-resets.jsonl` before any reset.
 
 ## Layout
 
-- `Sources/DL24Core`: protocol, parser, guards, regulator, test programs, simulator
-- `Sources/DL24Control`: transports, device controller, storage, SwiftUI screens
-- `Sources/DL24CoreChecks`: checks using bytes captured from a real unit
+- `Sources/DLXCore`: protocol, parser, guards, regulator, test programs, simulator
+- `Sources/DLXControl`: transports, device controller, storage, SwiftUI screens
+- `Sources/DLXCoreChecks`: checks using bytes captured from a real unit
 
 ## Credits
 

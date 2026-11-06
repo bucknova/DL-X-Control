@@ -1,5 +1,5 @@
 import AppKit
-import DL24Core
+import DLXCore
 import SwiftUI
 
 enum Screen: String, CaseIterable, Identifiable {
@@ -55,12 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct DL24ControlApp: App {
+struct DLXControlApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @LocalState private var model = AppModel()
 
     var body: some Scene {
-        Window("DL24 Control", id: "main") {
+        Window("DL-X Control", id: "main") {
             RootView()
                 .environment(model)
                 .preferredColorScheme(.dark)
@@ -123,7 +123,7 @@ struct MenuBarPanel: View {
         let d = model.device
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("DL24 Control").font(.headline)
+                Text("DL-X Control").font(.headline)
                 Spacer()
                 LinkLabel(device: d).font(.caption)
             }

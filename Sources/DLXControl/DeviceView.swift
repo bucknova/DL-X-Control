@@ -1,4 +1,4 @@
-import DL24Core
+import DLXCore
 import SwiftUI
 
 struct DeviceView: View {

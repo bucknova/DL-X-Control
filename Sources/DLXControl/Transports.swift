@@ -1,5 +1,5 @@
 import CoreBluetooth
-import DL24Core
+import DLXCore
 import Foundation
 import IOKit
 import IOKit.serial

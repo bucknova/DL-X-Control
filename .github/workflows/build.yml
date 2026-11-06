@@ -43,30 +43,30 @@ jobs:
           fi
 
       - name: Run protocol and safety checks
-        run: swift run DL24CoreChecks
+        run: swift run DLXCoreChecks
 
       - name: Build app
         run: ./build_app.sh ${{ matrix.arch }}
 
       - name: Confirm architectures
         run: |
-          actual="$(lipo -archs "build/DL24 Control.app/Contents/MacOS/DL24Control")"
+          actual="$(lipo -archs "build/DL-X Control.app/Contents/MacOS/DLXControl")"
           echo "Built for: $actual"
           for want in ${{ matrix.expect }}; do
             [[ " $actual " == *" $want "* ]] || { echo "Missing $want"; exit 1; }
           done
-          codesign --verify --verbose "build/DL24 Control.app"
+          codesign --verify --verbose "build/DL-X Control.app"
 
       - name: Package disk image
         run: |
-          name="DL24-Control-$VERSION-${{ matrix.suffix }}.dmg"
+          name="DL-X-Control-$VERSION-${{ matrix.suffix }}.dmg"
           ./make_dmg.sh "$name"
           shasum -a 256 "$name" > "$name.sha256"
           echo "DMG_NAME=$name" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DL24-Control-${{ matrix.suffix }}
+          name: DL-X-Control-${{ matrix.suffix }}
           path: |
             ${{ env.DMG_NAME }}
             ${{ env.DMG_NAME }}.sha256

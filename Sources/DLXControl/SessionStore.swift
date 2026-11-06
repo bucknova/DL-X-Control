@@ -1,4 +1,4 @@
-import DL24Core
+import DLXCore
 import Foundation
 import Observation
 
@@ -39,8 +39,8 @@ final class SessionStore {
 
     init(demo: Bool) {
         let base = demo
-            ? FileManager.default.temporaryDirectory.appendingPathComponent("DL24ControlDemo-\(ProcessInfo.processInfo.processIdentifier)")
-            : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("DL24 Control")
+            ? FileManager.default.temporaryDirectory.appendingPathComponent("DLXControlDemo-\(ProcessInfo.processInfo.processIdentifier)")
+            : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("DL-X Control")
         root = base
         try? FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
         reload()

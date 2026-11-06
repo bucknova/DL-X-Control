@@ -1,5 +1,5 @@
 import Charts
-import DL24Core
+import DLXCore
 import SwiftUI
 
 enum Theme {

@@ -1,7 +1,7 @@
-import DL24Core
+import DLXCore
 import Foundation
 
-// Runs without Xcode's test tools: `swift run DL24CoreChecks`. Expected bytes
+// Runs without Xcode's test tools: `swift run DLXCoreChecks`. Expected bytes
 // below are real ones captured from a DL24P, not computed values.
 
 var failures = 0, passed = 0
