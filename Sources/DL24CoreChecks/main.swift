@@ -153,14 +153,22 @@ check(open.start(at: 0) == [.setCurrent(5), .loadOn], "capacity holds")
 check(open.tick(sample(t: 90000, i: 5, set: 5)).isEmpty, "open-ended step only ends on a stop")
 
 // MARK: Analysis and CSV
-let ramp = (0...100).map { Sample(t: Double($0), voltage: 13 - Double($0) * 0.01, current: 5, milliampHours: Double($0) * 10,
-                                  milliwattHours: Double($0) * 120, temperatureC: 30 + Double($0) * 0.1, setCurrent: 5, loadOn: true) }
+var ramp: [Sample] = []
+for k in 0...100 {
+    let x = Double(k)
+    ramp.append(Sample(t: x, voltage: 13 - x * 0.01, current: 5, milliampHours: x * 10,
+                       milliwattHours: x * 120, temperatureC: 30 + x * 0.1, setCurrent: 5, loadOn: true))
+}
 let sum = SessionSummary(samples: ramp)
 check(near(sum.capacityAh, 1) && near(sum.energyWh, 12), "summary uses counters")
 check(near(sum.maxVoltage, 13) && near(sum.minVoltage, 12), "voltage range")
 check(near(sum.peakTemperature, 40), "peak temperature")
 check(near(sum.meanVoltage, 12), "mean voltage")
-let brief = (0...60).map { Sample(t: Double($0), voltage: 9, current: 0.3, milliampHours: 39977, milliwattHours: 289700, temperatureC: 27, setCurrent: 0.3, loadOn: true) }
+var brief: [Sample] = []
+for k in 0...60 {
+    brief.append(Sample(t: Double(k), voltage: 9, current: 0.3, milliampHours: 39977, milliwattHours: 289700,
+                        temperatureC: 27, setCurrent: 0.3, loadOn: true))
+}
 let briefSummary = SessionSummary(samples: brief)
 check(near(briefSummary.capacityAh, 0.005, 0.0001) && near(briefSummary.energyWh, 0.045, 0.0001), "short tests add up samples, matching the real 0.005 Ah run")
 let small = downsample(ramp, limit: 20)
