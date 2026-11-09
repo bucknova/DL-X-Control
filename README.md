@@ -4,6 +4,20 @@ A native Liquid Glass macOS app for the ATORCH DL24P electronic load: live monit
 
 > **Only tested with the ATORCH DL24P.** Other ATORCH loads, including other DL24 models and firmware versions, may behave differently or not work. This is an independent project, not affiliated with ATORCH.
 
+## Screenshots
+
+![Monitor screen during a real CC-CV run on a DL24P](docs/screenshots/monitor.jpg)
+
+*Monitor, during a real CC-CV run on a DL24P.*
+
+| Logger | Tests |
+|---|---|
+| ![Logger screen with a discharge curve](docs/screenshots/logger.jpg) | ![Tests screen with an internal resistance program](docs/screenshots/tests.jpg) |
+
+![Device screen with front-panel buttons and protocol console](docs/screenshots/device.jpg)
+
+*Logger, Tests and Device, shown with the app's simulated demo data.*
+
 ## Download
 
 Disk images are built by GitHub Actions:
@@ -97,6 +111,15 @@ swift run DLXCoreChecks
 ## Data
 
 Sessions are in `~/Library/Application Support/DL-X Control/Sessions`, one folder each with `meta.json` and an append-only `samples.csv`. Counter values are saved to `counter-resets.jsonl` before any reset.
+
+## Support
+
+This is a hobby project, shared as is, and support is minimal:
+
+- **One tester.** It has only been tested on one ATORCH DL24P with a CH340 USB port and Bluetooth. Newer DL24P boards that connect over USB HID use a different protocol and are not supported.
+- **Issues are welcome, but nothing is promised.** There may be no reply, fix or timeline.
+- **No other models are planned.** Requests to support other ATORCH loads are unlikely to be taken up.
+- **You are responsible for your setup.** The software comes with no warranty, as set out in the [license](LICENSE). Follow the safety notes above, and don't leave a test unattended.
 
 ## Layout
 
