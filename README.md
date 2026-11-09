@@ -27,7 +27,7 @@ xattr -dr com.apple.quarantine "/Applications/DL-X Control.app"
 ## Features
 
 - **Monitor:** live voltage, current, power and resistance with aligned charts and a cursor
-- **Control:** load on and off, current, cutoff and timer, plus CC, and app-regulated CP and CR
+- **Control:** load on and off, current, cutoff and timer, plus CC, and app-regulated CP, CR and CC-CV discharge
 - **Logger:** automatic recording, discharge curves, session comparison, marks, and CSV, JSON and PDF export
 - **Tests:** editable capacity, internal resistance, supply sweep, soak and custom programs with stop conditions
 - **Device:** remote front-panel buttons, counter resets with backup, and a raw protocol console
@@ -37,7 +37,8 @@ xattr -dr com.apple.quarantine "/Applications/DL-X Control.app"
 
 This software controls equipment that can overheat, damage batteries and start fires. Use it at your own risk, and never leave a test unattended until you have proven it on your own setup. See the [license](LICENSE).
 
-- **Front panel mode.** The app cannot read or set the panel's CC, CV, CR or CP mode. Set the panel to CC before turning the load on. In other modes the load ignores the app's current setting. The app stops the load if current overshoots, but some current flows before it can react. The app's CP and CR work by adjusting the current in CC.
+- **Front panel mode.** The app cannot read or set the panel's CC, CV, CR or CP mode. Set the panel to CC before turning the load on. In other modes the load ignores the app's current setting. The app stops the load if current overshoots, but some current flows before it can react. The app's CP, CR and CC-CV work by adjusting the current in CC.
+- **CC-CV discharge.** Sinks the CC current until the voltage falls to the CV target, lowers the current to hold that voltage, and turns the load off at the end current. The app runs this at most twice a second, so it is slow, and it can dip a little below the target. The DL24P's cutoff must sit below the target, or it stops the load before CV begins: the app warns about this and does not change the cutoff for you. If the connection drops, the DL24P holds the last current until its own cutoff or timer stops it, so set the cutoff to the lowest voltage the battery can safely reach.
 - **USB and Bluetooth share one serial line.** While the USB cable is plugged in, Bluetooth can read but cannot send commands, so the app uses USB. Unplug the cable to control over Bluetooth.
 - **USB may not be isolated.** One reverse-engineering source reports no isolation, so with mains-referenced or high-voltage sources, unplug the cable and use Bluetooth.
 - **The DL24P timer is a countdown.** It runs only while the load is on, does not reset, stops the load at zero and then turns itself off. The app warns when one is armed and turns it off before test programs.
@@ -48,10 +49,10 @@ This software controls equipment that can overheat, damage batteries and start f
 Tested on one DL24P, using a 9 V supply at up to 0.3 A:
 
 - USB and Bluetooth: readings, settings, load on and off, automatic switch from USB to Bluetooth
-- CC, CP and CR, cutoff stop, overshoot stop, timer stop, load-off on quit
+- CC, CP, CR and CC-CV, cutoff stop, overshoot stop, timer stop, load-off on quit, and turning the load off after a lost connection
 - Front-panel buttons, all counter resets, a test program
 
-**Not yet tested on hardware:** connection loss with the load running, long runs, currents above 0.3 A, the temperature and power stops, and the Intel build.
+**Not yet tested on hardware:** a CC-CV discharge of a real battery, long runs, currents above 0.3 A, the temperature and power stops, and the Intel build.
 
 ## DL24P behaviour worth knowing
 
@@ -62,6 +63,8 @@ Found while testing, and handled by the app:
 - A set-current write produces a phantom reading of about 250 mA, even at 0 V with the load off.
 - The energy counter moves in 100 mWh steps, so short tests use energy added up from samples.
 - Backlight and price commands are rejected as unsupported.
+
+The commands found on this tester, and what was tried without effect, are in [docs/DL24P-commands.md](docs/DL24P-commands.md).
 
 ## Build from source
 

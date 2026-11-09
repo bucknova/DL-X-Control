@@ -245,14 +245,27 @@ struct LoadConfirmSheet: View {
 
     var body: some View {
         let d = model.device
+        let issues = d.mode == .cccv ? d.cccvIssues : []
+        let isBlocked = issues.contains { $0.blocksStart }
         VStack(alignment: .leading, spacing: 14) {
             Label("Turn the load on?", systemImage: "bolt.fill").font(.title2.bold())
             Text("Set the DL24P's front panel to CC first. The app cannot read the panel mode, and in CV or CR the load ignores this app's current setting.")
                 .fixedSize(horizontal: false, vertical: true)
+            if d.mode == .cccv {
+                Text(String(format: "CC-CV is run by this app, not the DL24P. It sinks the CC current until the voltage falls to %.2f V, then lowers the current to hold that voltage, and turns the load off at %.2f A.", d.cccv.targetVoltage, d.cccv.endCurrent))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("If the connection drops, nothing holds the CV target: the DL24P keeps the last current until its own cutoff or timer stops it.")
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 5) {
                 GridRow { Text("Input now").foregroundStyle(Theme.secondary); Text(String(format: "%.3f V", d.voltage)) }
                 GridRow { Text(d.mode.setpointName).foregroundStyle(Theme.secondary); Text(targetText(d)) }
-                if d.mode != .cc { GridRow { Text("Current limit").foregroundStyle(Theme.secondary); Text(String(format: "%.2f A", d.currentLimit)) } }
+                if d.mode == .cp || d.mode == .cr { GridRow { Text("Current limit").foregroundStyle(Theme.secondary); Text(String(format: "%.2f A", d.currentLimit)) } }
+                if d.mode == .cccv {
+                    GridRow { Text("CV target").foregroundStyle(Theme.secondary); Text(String(format: "%.2f V", d.cccv.targetVoltage)) }
+                    GridRow { Text("End current").foregroundStyle(Theme.secondary); Text(String(format: "%.2f A", d.cccv.endCurrent)) }
+                }
                 GridRow { Text("Cutoff").foregroundStyle(Theme.secondary); Text(String(format: "%.2f V", d.stops.cutoffV)) }
                 if d.deviceTimerSeconds > 0 {
                     GridRow {
@@ -262,6 +275,13 @@ struct LoadConfirmSheet: View {
                 }
             }
             .monospacedDigit()
+            if d.mode == .cccv {
+                ForEach(issues.indices, id: \.self) { i in
+                    Label(issues[i].message, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(issues[i].blocksStart ? Theme.critical : Theme.warn)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Text("The app also turns the load off if current goes above the setting.").foregroundStyle(Theme.secondary)
             Toggle("Don't ask again until I quit", isOn: $dontAsk)
             HStack {
@@ -276,6 +296,7 @@ struct LoadConfirmSheet: View {
                 .buttonStyle(.glassProminent)
                 .tint(Theme.loadOn)
                 .foregroundStyle(.black)
+                .disabled(isBlocked)
             }
         }
         .padding(22)
@@ -287,6 +308,7 @@ struct LoadConfirmSheet: View {
         case .cc: String(format: "%.2f A", d.ccTarget)
         case .cp: String(format: "%.1f W", d.cpTarget)
         case .cr: String(format: "%.2f Ω", d.crTarget)
+        case .cccv: String(format: "%.2f A", d.cccv.current)
         }
     }
 }

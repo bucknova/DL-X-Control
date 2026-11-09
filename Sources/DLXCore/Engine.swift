@@ -23,15 +23,30 @@ public struct Sample: Codable, Equatable, Sendable, Identifiable {
 }
 
 public enum ControlMode: String, Codable, CaseIterable, Sendable, Identifiable {
-    case cc = "CC", cp = "CP", cr = "CR"
+    case cc = "CC", cp = "CP", cr = "CR", cccv = "CC-CV"
     public var id: String { rawValue }
-    public var unit: String { self == .cc ? "A" : self == .cp ? "W" : "Ω" }
-    public var setpointName: String { self == .cc ? "Current" : self == .cp ? "Power" : "Resistance" }
+    public var unit: String {
+        switch self {
+        case .cc, .cccv: "A"
+        case .cp: "W"
+        case .cr: "Ω"
+        }
+    }
+    public var setpointName: String {
+        switch self {
+        case .cc: "Current"
+        case .cp: "Power"
+        case .cr: "Resistance"
+        case .cccv: "CC current"
+        }
+    }
 }
 
 public enum Regulator {
     public static let minimumVoltage = 0.5
     public static let maxStepAmps = 0.5
+    /// The shortest time between current writes for any app-regulated mode.
+    public static let updateInterval = 0.5
 
     /// The DL24P only regulates current over its link, so CP and CR are run by
     /// the app. The result is always clamped to the limit, slew limited, and
@@ -41,7 +56,8 @@ public enum Regulator {
         let limit = max(0, limit)
         let wanted: Double
         switch mode {
-        case .cc: return min(max(target, 0), limit)
+        // CC-CV needs history, so it has its own type, CCCVRegulator.
+        case .cc, .cccv: return min(max(target, 0), limit)
         case .cp:
             guard voltage >= minimumVoltage else { return 0 }
             wanted = target / voltage
@@ -55,9 +71,261 @@ public enum Regulator {
     }
 }
 
+// MARK: - CC-CV
+
+public struct CCCVSettings: Codable, Equatable, Sendable {
+    public var current: Double
+    public var targetVoltage: Double
+    public var endCurrent: Double
+
+    /// A target above the source is refused at load-on, and one too low would
+    /// discharge deeply, so the default errs high.
+    public init(current: Double = 1, targetVoltage: Double = 12, endCurrent: Double = 0.1) {
+        self.current = current; self.targetVoltage = targetVoltage; self.endCurrent = endCurrent
+    }
+
+    /// Room to leave between the DL24P's cutoff and the target, because a slow
+    /// software loop can dip a little below the target.
+    public var cutoffMargin: Double { max(0.1, targetVoltage * 0.03) }
+
+    /// `cutoff` is the highest cutoff that will apply during the run. `inputVoltage`
+    /// is the reading before load-on, or nil once the load is on and the source sags.
+    public func issues(cutoff: Double, inputVoltage: Double?) -> [CCCVIssue] {
+        var found: [CCCVIssue] = []
+        if targetVoltage <= 0 { found.append(.invalidTarget) }
+        if endCurrent <= 0 || endCurrent >= current { found.append(.invalidEndCurrent) }
+        if cutoff >= targetVoltage {
+            found.append(.cutoffAtOrAboveTarget(cutoff: cutoff, target: targetVoltage))
+        } else if cutoff > targetVoltage - cutoffMargin {
+            found.append(.cutoffCloseToTarget(cutoff: cutoff, target: targetVoltage))
+        }
+        if let inputVoltage, inputVoltage <= targetVoltage {
+            found.append(.inputAtOrBelowTarget(voltage: inputVoltage, target: targetVoltage))
+        }
+        return found
+    }
+}
+
+public enum CCCVIssue: Equatable, Sendable {
+    case invalidTarget, invalidEndCurrent
+    case cutoffAtOrAboveTarget(cutoff: Double, target: Double)
+    case cutoffCloseToTarget(cutoff: Double, target: Double)
+    case inputAtOrBelowTarget(voltage: Double, target: Double)
+
+    /// A cutoff problem is only a warning: the load stops early, which is safe, and
+    /// the setting stays the user's choice. The others leave nothing sensible to run.
+    public var blocksStart: Bool {
+        switch self {
+        case .invalidTarget, .invalidEndCurrent, .inputAtOrBelowTarget: true
+        case .cutoffAtOrAboveTarget, .cutoffCloseToTarget: false
+        }
+    }
+
+    public var message: String {
+        switch self {
+        case .invalidTarget:
+            "The CV target must be above 0 V."
+        case .invalidEndCurrent:
+            "The end current must be above 0 A and below the CC current."
+        case .cutoffAtOrAboveTarget(let c, let t):
+            String(format: "The %.2f V cutoff is not below the %.2f V CV target, so the load will stop before CV begins. Lower the cutoff.", c, t)
+        case .cutoffCloseToTarget(let c, let t):
+            String(format: "The %.2f V cutoff is close to the %.2f V CV target, so a small dip could stop the load early.", c, t)
+        case .inputAtOrBelowTarget(let v, let t):
+            String(format: "The input is %.3f V, already at or below the %.2f V CV target, so there is nothing to discharge.", v, t)
+        }
+    }
+}
+
+/// The DL24P only regulates current over its link, so CV is run by the app: hold
+/// the CC current until the voltage falls to the target, then lower the current to
+/// hold that voltage, and finish when it has tapered to the end current.
+///
+/// The source's resistance is unknown and can vary a thousandfold, so no single
+/// gain suits every source. Stability comes from these rules instead:
+/// - Decisions use the median of readings taken after the last write has settled.
+/// - Steps are proportional to the error and bounded, and errors within the noise
+///   are ignored.
+/// - Raising is slower than lowering, and needs the voltage to stay high for a while.
+/// - Each change of direction halves the gain. After a few, the current only falls,
+///   so hunting cannot be sustained on any source.
+///
+/// The caller feeds every sample while the load is on and carries out the action.
+public struct CCCVRegulator: Sendable {
+    public enum Phase: String, Sendable { case constantCurrent = "CC", constantVoltage = "CV" }
+    public enum Action: Equatable, Sendable { case hold, setCurrent(Double), stop(StopReason) }
+
+    public static let settleSeconds = 0.3
+    public static let minimumReadings = 3
+    public static let readingWindow = 5
+    public static let initialGain = 2.0      // amps per volt, per update
+    public static let minimumGain = 0.125
+    public static let raiseGainFactor = 0.25
+    public static let raiseHoldSeconds = 5.0
+    public static let maxReversals = 4
+    public static let finishHoldSeconds = 3.0
+
+    public var settings: CCCVSettings
+    public private(set) var phase = Phase.constantCurrent
+    public private(set) var reversals = 0
+    private var gain = CCCVRegulator.initialGain
+    private var voltages: [Double] = []
+    private var currents: [Double] = []
+    private var lastChange: Double?
+    private var lastDirection = 0
+    private var aboveSince: Double?
+    private var endedSince: Double?
+
+    public init(settings: CCCVSettings) { self.settings = settings }
+
+    /// Ignored within this much of the target. Readings carry a few millivolts of noise.
+    public var holdBand: Double { max(0.02, settings.targetVoltage * 0.002) }
+    /// How far below the target still counts as holding it when the run ends.
+    public var finishBand: Double { max(0.1, settings.targetVoltage * 0.05) }
+
+    /// Rounds to the DL24P's 0.01 A steps. The small nudge keeps 1.15 A from becoming 1.14 A.
+    private static func roundedDown(_ amps: Double) -> Double { ((amps * 100 + 1e-6).rounded(.down)) / 100 }
+    private static func rounded(_ amps: Double) -> Double { (amps * 100).rounded() / 100 }
+
+    private var limit: Double { Self.roundedDown(max(0, settings.current)) }
+    private var lowerCap: Double { min(max(0.01, limit * 0.05), 0.25) }
+    private var raiseCap: Double { min(max(0.01, limit * 0.01), 0.05) }
+    private var rampCap: Double { min(max(0.01, limit * 0.1), Regulator.maxStepAmps) }
+
+    private static func median(_ values: [Double]) -> Double {
+        let sorted = values.sorted()
+        return sorted[sorted.count / 2]
+    }
+
+    /// The first current to write at load-on. Current ramps up from here, so a
+    /// source that sags under load enters CV gently instead of falling through it.
+    public static func startCurrent(settings: CCCVSettings, voltage: Double) -> Double {
+        let probe = CCCVRegulator(settings: settings)
+        return probe.ramped(from: 0, voltage: voltage)
+    }
+
+    private func ramped(from set: Double, voltage: Double) -> Double {
+        let headroom = max(0, voltage - settings.targetVoltage)
+        let step = min(rampCap, gain * headroom)
+        return min(Self.rounded(set + step), limit)
+    }
+
+    /// `setCurrent` is what the DL24P was last read back as holding, so a change made
+    /// on its front panel is seen here too.
+    public mutating func update(t: Double, voltage: Double, current: Double, setCurrent: Double) -> Action {
+        let set = max(0, setCurrent)
+
+        // Above the user's CC current, however that came about. Only this write may
+        // be larger than a normal step, and it can only go down.
+        if set > limit + 0.001 {
+            let isDue = lastChange.map { t - $0 >= Regulator.updateInterval } ?? true
+            if lastChange == nil { lastChange = t }
+            return isDue ? write(limit, at: t, direction: 0) : .hold
+        }
+        if lastChange == nil { lastChange = t }
+        let changed = lastChange ?? t
+
+        currents.append(current)
+        if currents.count > Self.minimumReadings { currents.removeFirst() }
+        if t - changed >= Self.settleSeconds {
+            voltages.append(voltage)
+            if voltages.count > Self.readingWindow { voltages.removeFirst() }
+        }
+        guard voltages.count >= Self.minimumReadings else { return .hold }
+        let v = Self.median(voltages)
+
+        if phase == .constantCurrent {
+            let isRamping = set < limit
+            let reachedTarget = v <= settings.targetVoltage
+            let nearTarget = isRamping && v - settings.targetVoltage <= holdBand
+            if reachedTarget || nearTarget { phase = .constantVoltage }
+        }
+        if phase == .constantVoltage, let stop = finish(t: t, v: v, set: set) { return .stop(stop) }
+
+        guard t - changed >= Regulator.updateInterval else { return .hold }
+        if phase == .constantCurrent {
+            guard set < limit else { return .hold }
+            let next = ramped(from: set, voltage: v)
+            return next > set ? write(next, at: t, direction: 0) : .hold
+        }
+        return holdVoltage(t: t, v: v, set: set)
+    }
+
+    /// Call when a write has actually landed. Writes are spaced and read back, so one
+    /// can finish well after `update` asked for it, and settling starts from here.
+    public mutating func writeApplied(at t: Double) {
+        lastChange = t
+        voltages.removeAll()
+    }
+
+    private mutating func finish(t: Double, v: Double, set: Double) -> StopReason? {
+        guard currents.count >= Self.minimumReadings else { return nil }
+        let i = Self.median(currents)
+        // The DL24P's reading can sit a little above its setting, and on a steady
+        // source nothing would then lower it further, so allow for that.
+        let tolerance = max(0.02, settings.endCurrent * 0.1)
+        let ended = i <= settings.endCurrent || (set <= settings.endCurrent && i <= settings.endCurrent + tolerance)
+        guard ended else { endedSince = nil; return nil }
+        let since = endedSince ?? t
+        endedSince = since
+        guard t - since >= Self.finishHoldSeconds else { return nil }
+        // No current and no voltage is a lost source, not a finished discharge.
+        if v < settings.targetVoltage - finishBand {
+            return .cvVoltageLost(voltage: v, target: settings.targetVoltage)
+        }
+        return .endCurrentReached(current: settings.endCurrent)
+    }
+
+    private mutating func holdVoltage(t: Double, v: Double, set: Double) -> Action {
+        let error = v - settings.targetVoltage
+        // Noise must not count as error: lowering responds sooner than raising, so
+        // it would walk the current down on a source that is really at the target.
+        let spread = (voltages.max() ?? v) - (voltages.min() ?? v)
+        let band = holdBand + spread / 2
+        if error < -band {
+            aboveSince = nil
+            let isFarBelow = -error > finishBand
+            let step = isFarBelow ? lowerCap : min(lowerCap, gain * -error)
+            let next = max(0, Self.rounded(set - max(0.01, step)))
+            return next < set ? write(next, at: t, direction: -1) : .hold
+        }
+        let canRaise = reversals < Self.maxReversals && set < limit
+        guard error > band + holdBand, canRaise else { aboveSince = nil; return .hold }
+        let since = aboveSince ?? t
+        aboveSince = since
+        guard t - since >= Self.raiseHoldSeconds else { return .hold }
+        aboveSince = nil
+        let step = min(raiseCap, gain * Self.raiseGainFactor * error)
+        let next = min(Self.rounded(set + max(0.01, step)), limit)
+        return next > set ? write(next, at: t, direction: 1) : .hold
+    }
+
+    private mutating func write(_ amps: Double, at t: Double, direction: Int) -> Action {
+        if direction != 0 {
+            if lastDirection != 0, direction != lastDirection {
+                reversals += 1
+                gain = max(Self.minimumGain, gain / 2)
+            }
+            lastDirection = direction
+        }
+        lastChange = t
+        voltages.removeAll()
+        return .setCurrent(amps)
+    }
+}
+
 public enum StopReason: Codable, Equatable, Sendable {
     case user, cutoff, temperature, power, capacity, overshoot(current: Double, set: Double)
     case linkLost, timeLimit, finished, deviceTurnedOff, deviceRejectedSetting
+    case endCurrentReached(current: Double), cvVoltageLost(voltage: Double, target: Double)
+
+    /// A planned end to a run, rather than something going wrong.
+    public var isNormalFinish: Bool {
+        switch self {
+        case .finished, .endCurrentReached: true
+        default: false
+        }
+    }
 
     public var title: String {
         switch self {
@@ -72,6 +340,8 @@ public enum StopReason: Codable, Equatable, Sendable {
         case .finished: "Finished"
         case .deviceTurnedOff: "Load turned off on the DL24P"
         case .deviceRejectedSetting: "The DL24P rejected a setting"
+        case .endCurrentReached: "CC-CV finished"
+        case .cvVoltageLost: "Voltage lost during CV"
         }
     }
 
@@ -87,6 +357,10 @@ public enum StopReason: Codable, Equatable, Sendable {
         case .power: "Power rose above the limit."
         case .capacity: "The capacity limit was reached."
         case .timeLimit: "The DL24P's own timer ran out, which stops the load and turns the timer off."
+        case .endCurrentReached(let i):
+            String(format: "The current tapered to %.2f A, the end current, so the app turned the load off.", i)
+        case .cvVoltageLost(let v, let t):
+            String(format: "With almost no current flowing, the voltage was %.2f V, well below the %.2f V CV target. Check the source and its connections.", v, t)
         case .user, .finished: ""
         }
     }
@@ -113,14 +387,14 @@ public struct GuardEngine: Sendable {
     public static let setpointGrace = 0.6
 
     private var cutoffCount = 0, tempCount = 0, powerCount = 0, overshootCount = 0
-    private var lastSetpointChange: Double = -.infinity
+    private var settling: [(t: Double, from: Double)] = []
     private var lastSet: Double?
 
     public init(stops: StopConditions) { self.stops = stops }
 
     public mutating func reset() {
         cutoffCount = 0; tempCount = 0; powerCount = 0; overshootCount = 0
-        lastSet = nil; lastSetpointChange = -.infinity
+        lastSet = nil; settling = []
     }
 
     /// `capacity` is the amount removed since the load started, in Ah.
@@ -128,21 +402,24 @@ public struct GuardEngine: Sendable {
         guard s.loadOn else { reset(); return nil }
         // Only lowering a setpoint needs time to settle. At load-on the current rises
         // from zero, so anything above the setting is already wrong.
-        if let previous = lastSet, previous != s.setCurrent {
-            if s.setCurrent < previous { lastSetpointChange = s.t }
-        }
+        if let previous = lastSet, s.setCurrent < previous { settling.append((t: s.t, from: previous)) }
         lastSet = s.setCurrent
+        settling.removeAll { s.t - $0.t >= Self.setpointGrace }
+        // While settling, the limit is the setting it is falling from. Switching the
+        // check off instead would leave it off for good under regulation, where the
+        // next lowering always arrives within the grace period.
+        var reference = s.setCurrent
+        for entry in settling { reference = max(reference, entry.from) }
 
         func count(_ c: inout Int, _ cond: Bool) -> Bool { c = cond ? c + 1 : 0; return c >= Self.confirmSamples }
 
-        let overLimit = s.current > s.setCurrent * 1.1 + 0.1
-        let inGrace = s.t - lastSetpointChange < Self.setpointGrace
+        let overLimit = s.current > reference * 1.1 + 0.1
         // Far above the setting, there is no time to wait for confirmation. The poll
         // loop has already re-read any jump, so a glitch does not reach this point.
-        if stops.overshootEnabled, !inGrace, s.current > s.setCurrent * 2 + 0.5 {
+        if stops.overshootEnabled, s.current > reference * 2 + 0.5 {
             return .overshoot(current: s.current, set: s.setCurrent)
         }
-        if stops.overshootEnabled, count(&overshootCount, overLimit && !inGrace) {
+        if stops.overshootEnabled, count(&overshootCount, overLimit) {
             return .overshoot(current: s.current, set: s.setCurrent)
         }
         if stops.temperatureEnabled, count(&tempCount, s.temperatureC >= stops.temperatureC) { return .temperature }

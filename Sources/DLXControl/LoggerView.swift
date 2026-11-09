@@ -225,7 +225,7 @@ struct SummaryRow: View {
     }
 
     private var linkText: String {
-        summary.linkDrops == 0 ? "Connection held" : "Connection dropped \(summary.linkDrops) times"
+        summary.linkDrops == 0 ? "Connection held" : summary.linkDrops == 1 ? "Connection dropped once" : "Connection dropped \(summary.linkDrops) times"
     }
 
     private func tile(_ a: String, _ b: String, _ c: String) -> some View {

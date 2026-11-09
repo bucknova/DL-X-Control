@@ -197,12 +197,21 @@ struct ControlPanel: View {
                                       range: 0.1...10000) { d.crTarget = $0 }
                         SetpointField(label: "Limit", unit: "A", value: d.currentLimit, step: 0.5, decimals: 2,
                                       range: Command.currentRange) { d.currentLimit = $0 }
+                    case .cccv:
+                        SetpointField(label: "CC current", unit: "A", value: d.cccv.current, step: 0.1, decimals: 2,
+                                      range: Command.currentRange) { d.cccv.current = $0 }
+                        SetpointField(label: "CV target", unit: "V", value: d.cccv.targetVoltage, step: 0.1, decimals: 2,
+                                      range: 0.1...Command.cutoffRange.upperBound) { d.cccv.targetVoltage = $0 }
+                        SetpointField(label: "End current", unit: "A", value: d.cccv.endCurrent, step: 0.05, decimals: 2,
+                                      range: 0.02...Command.currentRange.upperBound) { d.cccv.endCurrent = $0 }
                     }
                     SetpointField(label: "Cutoff", unit: "V", value: d.deviceCutoff, step: 0.1, decimals: 2,
                                   range: Command.cutoffRange, disabled: !d.isConnected) { d.applyCutoff($0) }
                     SetpointField(label: "Timer left", unit: "min", value: Double(d.deviceTimerSeconds) / 60, step: 1, decimals: 0,
                                   range: 0...1092, offText: "Off", disabled: !d.isConnected) { d.applyTimer(minutes: Int($0)) }
                 }
+
+                if d.mode == .cccv { CCCVStatus() }
 
                 Divider()
 
@@ -240,6 +249,7 @@ struct ControlPanel: View {
         case .cc: "Holds constant current on the DL24P. Set its front panel to CC first, because the app cannot read the panel mode."
         case .cp: "Holds constant power. This app adjusts the current, fastest over USB. Set the front panel to CC first."
         case .cr: "Holds constant resistance. This app adjusts the current, fastest over USB. Set the front panel to CC first."
+        case .cccv: "Sinks the CC current until the voltage falls to the CV target, then lowers it to hold that voltage, and stops at the end current. This app adjusts the current, up to twice a second. Set the front panel to CC first."
         }
     }
 
@@ -248,6 +258,33 @@ struct ControlPanel: View {
             Text(a).foregroundStyle(Color(hex: 0xD5DBE2))
             Text(b).font(.system(size: 16, weight: .semibold).monospacedDigit())
                 .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+}
+
+/// The CC-CV phase while running, and anything that would stop it working.
+struct CCCVStatus: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let d = model.device
+        VStack(alignment: .leading, spacing: 6) {
+            if d.loadOn, let phase = d.cccvPhase {
+                Text(phaseText(phase, d)).fontWeight(.semibold).monospacedDigit()
+            }
+            ForEach(d.cccvIssues.indices, id: \.self) { i in
+                Label(d.cccvIssues[i].message, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(d.cccvIssues[i].blocksStart ? Theme.critical : Theme.warn)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func phaseText(_ phase: CCCVRegulator.Phase, _ d: DeviceController) -> String {
+        switch phase {
+        case .constantCurrent: String(format: "CC phase: sinking up to %.2f A", d.cccv.current)
+        case .constantVoltage: String(format: "CV phase: holding %.2f V, ends at %.2f A", d.cccv.targetVoltage, d.cccv.endCurrent)
         }
     }
 }

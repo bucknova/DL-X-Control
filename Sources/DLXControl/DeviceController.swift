@@ -63,10 +63,27 @@ final class DeviceController {
     private(set) var loadBusy = false
 
     // Control
-    var mode: ControlMode = .cc { didSet { if oldValue != mode, loadOn { regulatedCurrent = deviceSetCurrent } } }
+    var mode: ControlMode = .cc {
+        didSet {
+            guard oldValue != mode else { return }
+            if loadOn { regulatedCurrent = deviceSetCurrent }
+            cccvRun = loadOn && mode == .cccv ? CCCVRegulator(settings: cccv) : nil
+        }
+    }
     var ccTarget = 0.0
     var cpTarget = 10.0
     var crTarget = 10.0
+    var cccv = CCCVSettings() { didSet { cccvRun?.settings = cccv } }
+    private var cccvRun: CCCVRegulator?
+    var cccvPhase: CCCVRegulator.Phase? { cccvRun?.phase }
+
+    /// Checked against the highest cutoff that can act during the run. Load-on sends
+    /// the app's cutoff only when it is enabled. Otherwise the DL24P keeps its own.
+    var cccvIssues: [CCCVIssue] {
+        var cutoff = stops.cutoffEnabled ? stops.cutoffV : deviceCutoff
+        if loadOn { cutoff = max(cutoff, deviceCutoff) }
+        return cccv.issues(cutoff: cutoff, inputVoltage: loadOn ? nil : voltage)
+    }
     var currentLimit: Double {
         didSet { UserDefaults.standard.set(currentLimit, forKey: "currentLimit") }
     }
@@ -140,7 +157,7 @@ final class DeviceController {
     private var lastCurrentWrite = Date.distantPast
     private static let writeSpacing = 0.25
     private static let writeAttempts = 3
-    private static let regulationInterval = 0.5
+    private static let regulationInterval = Regulator.updateInterval
 
     init(store: SessionStore, demo: Bool) {
         self.store = store
@@ -507,12 +524,16 @@ final class DeviceController {
         if on {
             loadBaseMilliampHours = milliampHours
             guardEngine.reset()
+            cccvRun = mode == .cccv ? CCCVRegulator(settings: cccv) : nil
             // Also true when it was started from the front panel or the OK button:
             // protection and logging must not depend on who started it.
             commandedLoad = true
             stopRecordingAt = nil
             if autoRecord, recorder == nil { startRecording(name: "Started on DL24P") }
-        } else if commandedLoad {
+            return
+        }
+        cccvRun = nil
+        if commandedLoad {
             // It went off without the app asking: DL24 cutoff, timer or front panel.
             commandedLoad = false
             let timerWasArmed = lastTimerSecondsWhileOn > 0 && lastTimerSecondsWhileOn <= 60
@@ -535,6 +556,8 @@ final class DeviceController {
                        temperatureC: temperatureC, setCurrent: deviceSetCurrent, loadOn: loadOn)
         live.append(s)
         if live.count > 60_000 { live.removeFirst(10_000) }
+        // The guards keep this clock: starting a recording mid-run restarts the other one.
+        let guardSample = s
 
         if let r = recorder, let start = recordedTimeOffset {
             s.t = now.timeIntervalSince(start)
@@ -547,7 +570,7 @@ final class DeviceController {
 
         if loadOn {
             let removed = max(0, milliampHours - loadBaseMilliampHours) / 1000
-            if let reason = guardEngine.evaluate(s, capacityAh: removed) {
+            if let reason = guardEngine.evaluate(guardSample, capacityAh: removed) {
                 if run != nil {
                     applyProgramActions(run!.abort(reason))
                 } else {
@@ -564,12 +587,35 @@ final class DeviceController {
     }
 
     private func regulate() async {
+        if mode == .cccv { await regulateCCCV(); return }
         let target = mode == .cp ? cpTarget : crTarget
         let next = Regulator.current(mode: mode, target: target, voltage: voltage, previous: regulatedCurrent, limit: currentLimit)
         guard abs(next - regulatedCurrent) >= 0.01, Date().timeIntervalSince(lastRegulation) >= Self.regulationInterval else { return }
         lastRegulation = Date()
         regulatedCurrent = next
         if await !writeCurrent(next) { await turnLoadOff(reason: .deviceRejectedSetting) }
+    }
+
+    private func regulateCCCV() async {
+        guard var r = cccvRun else { return }
+        let before = r.phase
+        let action = r.update(t: Date().timeIntervalSince(liveStart), voltage: voltage, current: current, setCurrent: deviceSetCurrent)
+        cccvRun = r
+        if before != r.phase, r.phase == .constantVoltage { recorder?.mark("CV started") }
+        switch action {
+        case .hold:
+            break
+        case .setCurrent(let amps):
+            lastRegulation = Date()
+            regulatedCurrent = amps
+            if await writeCurrent(amps) {
+                cccvRun?.writeApplied(at: Date().timeIntervalSince(liveStart))
+            } else {
+                await turnLoadOff(reason: .deviceRejectedSetting)
+            }
+        case .stop(let reason):
+            await turnLoadOff(reason: reason)
+        }
     }
 
     private func publishChart(_ now: Date) {
@@ -592,7 +638,9 @@ final class DeviceController {
     /// Called by every "turn on" control. Asks first, because the app cannot
     /// read the front panel mode and CV or CR would not honour the setpoint.
     func requestLoadOn() {
-        if skipLoadConfirmation { Task { await turnLoadOn() } } else { showLoadConfirmation = true }
+        // A CC-CV problem still gets shown, even after "Don't ask again".
+        let hasIssue = mode == .cccv && !cccvIssues.isEmpty
+        if skipLoadConfirmation, !hasIssue { Task { await turnLoadOn() } } else { showLoadConfirmation = true }
     }
 
     func toggleLoad() {
@@ -604,12 +652,18 @@ final class DeviceController {
         loadBusy = true
         defer { loadBusy = false }
         banner = nil
+        if mode == .cccv, let issue = cccvIssues.first(where: { $0.blocksStart }) {
+            banner = StopBanner(title: "The load did not start", detail: issue.message, isProblem: true)
+            return
+        }
         guardEngine = GuardEngine(stops: stops)
         let start: Double
         switch mode {
         case .cc: start = ccTarget
         case .cp, .cr:
             start = Regulator.current(mode: mode, target: mode == .cp ? cpTarget : crTarget, voltage: voltage, previous: 0, limit: currentLimit)
+        case .cccv:
+            start = CCCVRegulator.startCurrent(settings: cccv, voltage: voltage)
         }
         regulatedCurrent = start
         guard await writeCurrent(start) else {
@@ -664,14 +718,14 @@ final class DeviceController {
                 if !loadOn { break }
             }
         }
-        finishStop(reason, problem: reason != .user)
+        finishStop(reason, problem: reason != .user && !reason.isNormalFinish)
     }
 
     private func finishStop(_ reason: StopReason, problem: Bool) {
         lastStop = reason
         if reason != .user {
             banner = StopBanner(title: reason.title, detail: reason.detail, isProblem: problem)
-            recorder?.mark(reason.title)
+            if reason != .linkLost { recorder?.mark(reason.title) } // closed() already marked the moment it dropped
         }
         if recorder != nil { stopRecordingAt = Date().addingTimeInterval(3) }
     }
